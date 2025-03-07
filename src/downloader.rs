@@ -21,34 +21,45 @@ impl Downloader {
     /// Get metadata about a file before downloading
     /// Returns the content length and whether the server supports range requests
     async fn get_file_metadata(&self, url: &str) -> Result<(Option<u64>, bool)> {
+        // Instead of a HEAD request, use a GET request with no body
+        // Many servers that reject HEAD requests will accept this
         let response = self
             .client
-            .head(url)
+            .get(url)
+            .header("Range", "bytes=0-0") // Request just the first byte
             .send()
             .await
-            .context("Failed to send HEAD request")?;
+            .context("Failed to send GET request for metadata")?;
 
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "HEAD request failed with status: {}",
-                response.status()
-            ));
-        }
+        let status = response.status();
 
-        // Check if server supports range requests
-        let supports_range = response
-            .headers()
-            .get("accept-ranges")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v == "bytes")
-            .unwrap_or(false);
+        // If we get a 206 Partial Content, the server supports range requests
+        let supports_range = status == StatusCode::PARTIAL_CONTENT;
 
-        // Get content length if available
-        let content_length = response
-            .headers()
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u64>().ok());
+        // Get content length from Content-Range header for range requests
+        // or regular Content-Length header otherwise
+        let content_length = if supports_range {
+            // For 206 responses, we can get the total size from Content-Range header
+            // Format is typically "bytes 0-0/1234" where 1234 is the total size
+            response
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| {
+                    v.split('/')
+                        .nth(1)
+                        .and_then(|size| size.parse::<u64>().ok())
+                })
+        } else if status.is_success() {
+            // For regular 200 OK responses, use Content-Length
+            response
+                .headers()
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+        } else {
+            return Err(anyhow!("Request failed with status: {}", status));
+        };
 
         info!(
             "File metadata - Content length: {:?}, Supports range: {}",
