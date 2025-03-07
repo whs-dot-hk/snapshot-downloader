@@ -141,7 +141,7 @@ impl Downloader {
     }
 
     /// Checks if a file already exists and returns its size
-    async fn check_existing_file(&self, path: &PathBuf) -> Result<(bool, u64)> {
+    async fn check_existing_file(&self, path: &Path) -> Result<(bool, u64)> {
         let file_exists = path.exists();
         let file_size = if file_exists {
             tokio::fs::metadata(path).await?.len()
@@ -156,7 +156,7 @@ impl Downloader {
     fn log_download_start(
         &self,
         file_name: &str,
-        output_path: &PathBuf,
+        output_path: &Path,
         file_exists: bool,
         file_size: u64,
     ) {
@@ -180,7 +180,7 @@ impl Downloader {
         remote_size: Option<u64>,
     ) -> bool {
         if let Some(remote_size) = remote_size {
-            file_exists && file_size >= remote_size
+            file_exists && file_size == remote_size
         } else {
             false
         }
@@ -189,7 +189,7 @@ impl Downloader {
     /// Opens the output file in the appropriate mode (create or append)
     async fn open_output_file(
         &self,
-        output_path: &PathBuf,
+        output_path: &Path,
         file_exists: bool,
         file_size: u64,
         supports_range: bool,
@@ -257,9 +257,8 @@ impl Downloader {
                     file_size,
                 )
                 .await
-                .map(|path| {
+                .inspect(|_| {
                     info!("Resumed download completed successfully");
-                    path
                 })
             }
             StatusCode::RANGE_NOT_SATISFIABLE => {
@@ -290,7 +289,7 @@ impl Downloader {
     async fn restart_download(
         &self,
         url: &str,
-        output_path: &PathBuf,
+        output_path: &Path,
         remote_size: Option<u64>,
     ) -> Result<PathBuf> {
         // Create a new file from scratch
@@ -318,7 +317,7 @@ impl Downloader {
         self.process_download_stream(
             new_response,
             file,
-            output_path.clone(),
+            output_path.to_path_buf(),
             remote_size,
             false,
             0,

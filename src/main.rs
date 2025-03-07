@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, Level};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
@@ -90,7 +90,7 @@ fn setup_logging(verbose: bool) -> Result<()> {
 }
 
 /// Creates necessary directories for downloads and data
-fn create_directories(base_dir: &PathBuf) -> Result<(PathBuf, PathBuf)> {
+fn create_directories(base_dir: &Path) -> Result<(PathBuf, PathBuf)> {
     let snapshots_dir = base_dir.join("snapshots");
     std::fs::create_dir_all(&snapshots_dir).context("Failed to create snapshots directory")?;
 
@@ -103,7 +103,7 @@ fn create_directories(base_dir: &PathBuf) -> Result<(PathBuf, PathBuf)> {
 /// Downloads the snapshot and binary files
 async fn download_required_files(
     config: &Config,
-    snapshots_dir: &PathBuf,
+    snapshots_dir: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     let downloader = Downloader::new();
 
@@ -126,10 +126,10 @@ async fn download_required_files(
 
 /// Extracts the snapshot and binary files
 async fn extract_files(
-    snapshot_path: &PathBuf,
-    binary_path: &PathBuf,
-    snapshots_dir: &PathBuf,
-    output_dir: &PathBuf,
+    snapshot_path: &Path,
+    binary_path: &Path,
+    snapshots_dir: &Path,
+    output_dir: &Path,
 ) -> Result<()> {
     let extractor = Extractor::new();
 
@@ -151,7 +151,7 @@ async fn extract_files(
 }
 
 /// Sets up the Cosmos node with the downloaded data
-fn setup_cosmos_node(config: &Config, output_dir: &PathBuf, data_dir: &PathBuf) -> Result<()> {
+fn setup_cosmos_node(config: &Config, output_dir: &Path, data_dir: &Path) -> Result<()> {
     let binary_extract_path = output_dir.join("bin_extract");
     let cosmos_setup = CosmosSetup::new(&config.cosmos, &binary_extract_path, data_dir);
 
