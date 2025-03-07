@@ -1,0 +1,17 @@
+snapshot_url: https://snapshot.cronos.org/cronos/testnet-snapshot/versiondb/memiavl/cronostestnet_338-3-versiondb-memiavl-20250305.tar.lz4
+binary_url: https://github.com/crypto-org-chain/cronos/releases/download/v1.4.4/cronos_1.4.4-testnet_Linux_x86_64.tar.gz
+cosmos:
+  bin: bin/cronosd
+  init_command: init test --chain-id cronostestnet_338-3
+  start_command: start
+  app:
+    minimum-gas-prices: "5000000000000basetcro"
+  config:
+    moniker: "my-testnet-node"
+    fastsync:
+      version: "v0"
+    rpc:
+      laddr: "tcp://0.0.0.0:26657"
+    p2p:
+      laddr: "tcp://0.0.0.0:26656"
+      persistent_peers: "peers-here" 
