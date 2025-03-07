@@ -6,14 +6,24 @@ use std::path::Path;
 use tar::Archive;
 use tracing::{info, instrument};
 
+/// Handles extraction of compressed archive files
 pub struct Extractor {}
 
 impl Extractor {
+    /// Creates a new extractor instance
     pub fn new() -> Self {
         Extractor {}
     }
 
-    /// Extract an archive file to the specified directory
+    /// Extracts an archive file to the specified directory
+    ///
+    /// Supports multiple archive formats:
+    /// - .tar.gz / .tgz (gzip compressed tar)
+    /// - .tar.lz4 (LZ4 compressed tar)
+    ///
+    /// # Arguments
+    /// * `archive_path` - Path to the archive file
+    /// * `output_dir` - Directory where contents should be extracted
     #[instrument(skip(self, archive_path, output_dir), fields(file_name = archive_path.as_ref().file_name().and_then(|n| n.to_str())))]
     pub fn extract<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
@@ -26,19 +36,22 @@ impl Extractor {
             .and_then(|name| name.to_str())
             .context("Failed to get archive filename")?;
 
-        info!("Extracting archive");
+        info!("Extracting archive: {}", file_name);
 
-        if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
-            self.extract_tar_gz(path, output_dir.as_ref())
-        } else if file_name.ends_with(".tar.lz4") {
-            self.extract_tar_lz4(path, output_dir.as_ref())
-        } else {
-            Err(anyhow!("Unsupported archive format: {}", file_name))
+        // Determine extraction method based on file extension
+        match file_name {
+            name if name.ends_with(".tar.gz") || name.ends_with(".tgz") => {
+                self.extract_tar_gz(path, output_dir.as_ref())
+            }
+            name if name.ends_with(".tar.lz4") => self.extract_tar_lz4(path, output_dir.as_ref()),
+            _ => Err(anyhow!("Unsupported archive format: {}", file_name)),
         }
     }
 
-    /// Extract a .tar.gz archive
-    #[instrument(skip(self, archive_path, output_dir))]
+    /// Extracts a tar.gz compressed archive
+    ///
+    /// Uses a streaming approach to minimize memory usage during extraction
+    #[instrument(skip(self, archive_path, output_dir), fields(path = %archive_path.as_ref().display()))]
     fn extract_tar_gz<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         archive_path: P,
@@ -48,10 +61,10 @@ impl Extractor {
         let file = File::open(archive_path).context("Failed to open .tar.gz archive")?;
 
         info!("Creating gzip decoder");
-        let gz = GzDecoder::new(file);
-        let mut archive = Archive::new(gz);
+        let gz_decoder = GzDecoder::new(file);
+        let mut archive = Archive::new(gz_decoder);
 
-        info!("Unpacking tar archive");
+        info!("Unpacking tar archive to {}", output_dir.as_ref().display());
         archive
             .unpack(output_dir)
             .context("Failed to extract .tar.gz archive")?;
@@ -60,8 +73,10 @@ impl Extractor {
         Ok(())
     }
 
-    /// Extract a .tar.lz4 archive
-    #[instrument(skip(self, archive_path, output_dir))]
+    /// Extracts a tar.lz4 compressed archive
+    ///
+    /// Uses buffered reading and streaming extraction to handle large files efficiently
+    #[instrument(skip(self, archive_path, output_dir), fields(path = %archive_path.as_ref().display()))]
     fn extract_tar_lz4<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         archive_path: P,
@@ -74,14 +89,16 @@ impl Extractor {
         let buf_reader = BufReader::new(file);
 
         info!("Creating LZ4 decoder");
-        let decoder = lz4::Decoder::new(buf_reader).context("Failed to create LZ4 decoder")?;
+        let lz4_decoder = lz4::Decoder::new(buf_reader).context("Failed to create LZ4 decoder")?;
 
-        info!("Decompressing LZ4 data (this may take a while for large snapshots)");
-        // Instead of loading the entire decompressed data into memory, we can
-        // directly pipe the LZ4 decoder to the tar extractor
-        let mut archive = Archive::new(decoder);
+        info!("Decompressing LZ4 data (this may take a while for large archives)");
+        // Pipe the LZ4 decoder directly to the tar extractor for memory efficiency
+        let mut archive = Archive::new(lz4_decoder);
 
-        info!("Extracting tar archive to directory");
+        info!(
+            "Extracting tar archive to {}",
+            output_dir.as_ref().display()
+        );
         archive
             .unpack(output_dir)
             .context("Failed to extract tar archive")?;
