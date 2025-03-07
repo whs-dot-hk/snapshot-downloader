@@ -71,25 +71,24 @@ impl Downloader {
         // Send the request
         let response = request.send().await.context("Failed to send GET request")?;
 
-        // Check if the server supports resuming
-        if file_exists && file_size > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
-        {
-            // If the server doesn't support resuming, start over
-            info!("Server doesn't support resume, starting download from the beginning");
-            file = tokio::fs::File::create(&output_path)
-                .await
-                .context("Failed to create output file after resume failed")?;
-        }
+        // Log response status and headers for troubleshooting
+        info!("Response status: {}", response.status());
+        info!("Response headers: {:#?}", response.headers());
 
-        let total_size = if file_exists
-            && file_size > 0
-            && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-        {
-            // For resumed downloads with PARTIAL_CONTENT response, add existing file size to content length
+        // We always attempt to resume if file_size > 0, regardless of response status
+
+        let total_size = if file_exists && file_size > 0 {
+            // For resumed downloads, add existing file size to content length
+            info!(
+                "Resuming download, adding existing file size {} to content length",
+                file_size
+            );
             file_size + response.content_length().unwrap_or(0)
         } else {
-            // For new downloads or restarted downloads, use content length directly
-            response.content_length().unwrap_or(0)
+            // For new downloads, use content length directly
+            let content_length = response.content_length().unwrap_or(0);
+            info!("New download, content length: {}", content_length);
+            content_length
         };
 
         // Set up progress bar
@@ -101,10 +100,9 @@ impl Downloader {
         );
 
         // Set initial position if resuming
-        let mut downloaded = if file_exists
-            && file_size > 0
-            && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
-        {
+        let mut downloaded = if file_exists && file_size > 0 {
+            // If we're resuming, start from the existing file position
+            info!("Continuing download from position: {}", file_size);
             progress_bar.set_position(file_size);
             file_size
         } else {
