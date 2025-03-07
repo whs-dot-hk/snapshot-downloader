@@ -18,29 +18,79 @@ impl Downloader {
     }
 
     /// Download a file from a URL and save it to the specified directory
+    /// Supports resuming downloads if the file already exists
     pub async fn download<P: AsRef<Path>>(&self, url: &str, output_dir: P) -> Result<PathBuf> {
         let file_name = url
             .split('/')
-            .last()
+            .next_back()
             .context("Failed to determine file name from URL")?;
 
         let output_path = output_dir.as_ref().join(file_name);
 
-        // Create the file
-        let mut file = tokio::fs::File::create(&output_path)
-            .await
-            .context("Failed to create output file")?;
+        // Check if file exists to determine if we're resuming
+        let file_exists = output_path.exists();
+        let file_size = if file_exists {
+            tokio::fs::metadata(&output_path).await?.len()
+        } else {
+            0
+        };
 
-        // Send the GET request
-        info!("Starting download of {}", file_name);
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .context("Failed to send GET request")?;
+        // Print status message based on whether we're resuming or starting fresh
+        info!(
+            "{} download of {}",
+            if file_exists && file_size > 0 {
+                "Resuming"
+            } else {
+                "Starting"
+            },
+            file_name
+        );
 
-        let total_size = response.content_length().unwrap_or(0);
+        // Open the file in the appropriate mode (create or append)
+        let mut file = if file_exists && file_size > 0 {
+            tokio::fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(&output_path)
+                .await
+                .context("Failed to open existing file for resuming download")?
+        } else {
+            tokio::fs::File::create(&output_path)
+                .await
+                .context("Failed to create output file")?
+        };
+
+        // Create the request, adding Range header if resuming
+        let mut request = self.client.get(url);
+
+        if file_exists && file_size > 0 {
+            info!("Resuming from byte position {}", file_size);
+            request = request.header("Range", format!("bytes={}-", file_size));
+        }
+
+        // Send the request
+        let response = request.send().await.context("Failed to send GET request")?;
+
+        // Check if the server supports resuming
+        if file_exists && file_size > 0 && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+        {
+            // If the server doesn't support resuming, start over
+            info!("Server doesn't support resume, starting download from the beginning");
+            file = tokio::fs::File::create(&output_path)
+                .await
+                .context("Failed to create output file after resume failed")?;
+        }
+
+        let total_size = if file_exists
+            && file_size > 0
+            && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        {
+            // For resumed downloads with PARTIAL_CONTENT response, add existing file size to content length
+            file_size + response.content_length().unwrap_or(0)
+        } else {
+            // For new downloads or restarted downloads, use content length directly
+            response.content_length().unwrap_or(0)
+        };
 
         // Set up progress bar
         let progress_bar = ProgressBar::new(total_size);
@@ -50,9 +100,19 @@ impl Downloader {
                 .progress_chars("#>-"),
         );
 
+        // Set initial position if resuming
+        let mut downloaded = if file_exists
+            && file_size > 0
+            && response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+        {
+            progress_bar.set_position(file_size);
+            file_size
+        } else {
+            0
+        };
+
         // Download the file chunk by chunk
         let mut stream = response.bytes_stream();
-        let mut downloaded: u64 = 0;
 
         while let Some(item) = stream.next().await {
             let chunk = item.context("Error while downloading file")?;
@@ -62,9 +122,23 @@ impl Downloader {
 
             downloaded += chunk.len() as u64;
             progress_bar.set_position(downloaded);
+
+            // Log progress periodically (every 5MB)
+            if !chunk.is_empty() && downloaded % (5 * 1024 * 1024) < chunk.len() as u64 {
+                info!(
+                    "Downloaded: {:.2} MB / {:.2} MB",
+                    downloaded as f64 / 1_048_576.0,
+                    total_size as f64 / 1_048_576.0
+                );
+            }
         }
 
         progress_bar.finish_with_message(format!("Downloaded {} successfully", file_name));
+        info!(
+            "Completed download of {} ({:.2} MB)",
+            file_name,
+            downloaded as f64 / 1_048_576.0
+        );
 
         Ok(output_path)
     }

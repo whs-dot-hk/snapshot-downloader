@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use fs_extra::dir::{copy, CopyOptions};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
